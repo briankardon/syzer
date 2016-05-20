@@ -1,0 +1,113 @@
+#!/usr/bin/python
+import os, math, argparse, re
+from os.path import getsize, join, isfile, basename, abspath
+
+VERSION = '1.0'
+
+parser = argparse.ArgumentParser(description='Find the largest files or directories.')
+parser.add_argument('basedir', help='Base directory in which to look for files and directories')
+parser.add_argument('-min', default=None, type=float, help='Minimum file size to display, in MB (default: 0)')
+parser.add_argument('-max', default=None, type=float, help='Maximum file size to display, in MB (default: infinite)')
+parser.add_argument('-num', default=10, type=int, help='Maximum number of files to display')
+parser.add_argument('-d', '--directories', dest='directories', action='store_true', help='Include directories. Sizes only reflect files within directory, not within subdirectories (default: False)')
+parser.add_argument('-f', '--files', dest='files', action='store_true', help='Include regular files (default: True)')
+parser.add_argument('-r', dest='human', default=True, action='store_false', help='Display sizes in bytes without a unit suffix, rather than in human-readable format (default: False)')
+parser.add_argument('-v', '--verbose', dest='verbose', default=False, action='store_true', help='Display errors and warnings')
+parser.add_argument('--filter', default=None, help='Regex string used to filter file names.  Files are only included if they match the regular expression given.')
+parser.add_argument('--long', '-l', default=0, action='count', help='Display relative path with filenames.  Use the flag twice to show absolute paths.')
+parser.add_argument('--version', action='version', version='Syzer version {v}'.format(v=VERSION))
+args = vars(parser.parse_args())
+if not args['files'] and not args['directories']:  # If the user did not specify dirs or files, default to files.
+    args['files'] = True
+if args['max'] is not None:
+    args['max'] *= 1000000
+if args['min'] is not None:
+    args['min'] *= 1000000
+
+# for arg in args:
+#     print arg, args[arg]
+
+def insertSorted(element, sortedList, key=lambda x:x):
+    for k, e in enumerate(sortedList):
+        if key(element) < key(e):
+            break
+    else:
+        k = len(sortedList)
+    sortedList.insert(k, element)
+
+def convertFileSize(size):
+    if size == 0:
+        return '0 B'
+    units = ['B', 'kB', 'MB', 'GB', 'TB', 'PB']
+    power = int(math.log(size)/math.log(1000))
+    return str(round(float(size)/pow(1000, power), 1))+" "+units[power]
+
+def getFileList(basedir, maxSize=None, minSize=None, maxNum=None, includeFiles=True, includeDirs=False, human=True, verbose=False, ffilter=None):
+    fileList = []
+    fileCount = 0
+    key = lambda x:-x[1]
+    errors = 0
+    if ffilter is None:
+        pattern = None
+    else:
+        pattern = re.compile(ffilter)
+
+    for root, dirs, files in os.walk(basedir):
+        currentDirSize = 0
+        for filename in files:
+            try:
+                fileSize = getsize(join(root, filename))
+            except OSError:
+                fileSize = 0
+                if verbose:
+                    errors += 1
+                    print "Warning, could not calculate file size of {filename}.".format(filename=join(root, filename))            
+            currentDirSize += fileSize
+            if (includeFiles and 
+                    ((maxSize is None) or (fileSize <= maxSize)) and 
+                    ((minSize is None) or (fileSize >= minSize)) and
+                    ((pattern is None) or pattern.match(filename))):
+                insertSorted((join(root, filename), fileSize), fileList, key=key)
+                if maxNum is not None:
+                    fileList = fileList[:maxNum]
+        if (includeDirs and 
+                ((maxSize is None) or (currentDirSize <= maxSize)) and 
+                ((minSize is None) or (currentDirSize >= minSize)) and 
+                ((pattern is None) or pattern.match(root))):
+            insertSorted((root, currentDirSize), fileList, key=key)
+            if maxNum is not None:
+                fileList = fileList[:maxNum]
+    if verbose:
+        print
+        print "Warning: {num} file{s} have been excluded".format(num=errors, s='s'*(not errors==1))
+        if errors > 0:
+            print "Files are inaccessible, possibly due to insufficient permission."
+        print
+    return fileList
+
+#import cProfile
+#cProfile.run("getFileList('.', maxNum=10, ffilter='.*hi.*')")
+
+def displayFileList(fileList, humanReadable=False, longFormat=0):
+    if len(fileList) == 0:
+        print
+        print "No files found that matched the criteria."
+        print
+        return
+    maxWidth = max([len(str(x[1])) for x in fileList])
+    #print "long = ", longFormat
+    for filename, size in fileList:
+        if humanReadable:  # Human-readable format
+            size = convertFileSize(size)
+            width = '9'
+        else:              # Plain byte format
+            width = str(maxWidth+1)
+        if longFormat == 0:
+            filename = basename(filename)
+        elif longFormat > 1:
+            filename = abspath(filename)
+        print ('{size:<'+width+'}{name}').format(size=size, name=filename)
+        
+fileList = getFileList(args['basedir'], maxNum=args['num'], maxSize=args['max'], minSize=args['min'], includeFiles=args['files'], includeDirs=args['directories'], verbose=args['verbose'], ffilter=args['filter'])
+
+displayFileList(fileList, humanReadable=args['human'], longFormat=args['long'])
